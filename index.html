@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎧 VR Language Learning System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        #conversation { height: 350px; overflow-y: auto; }
+        #listening-indicator { display: none; }
+        .listening #listening-indicator { display: block; }
+    </style>
+</head>
+<body class="bg-gray-100 p-6 font-sans">
+    <div class="max-w-6xl mx-auto bg-white rounded-lg shadow-lg p-6">
+        <h1 class="text-3xl font-bold text-purple-600 text-center mb-4">🎧 VR Language Learning System</h1>
+        <p id="status" class="text-xl text-center mb-4 text-green-600">Ready to start! Press R, J, or S to choose a scenario.</p>
+
+        <div class="grid grid-cols-3 gap-4">
+            <!-- Scenario Info -->
+            <div class="col-span-2">
+                <div id="scenario-info" class="border border-blue-300 rounded p-4 bg-blue-50">
+                    <p id="scenario-setting" class="text-sm"></p>
+                    <p id="scenario-character" class="text-sm"></p>
+                </div>
+
+                <!-- Conversation History -->
+                <div id="conversation" class="border border-gray-300 rounded p-4 bg-gray-50 mt-4">
+                    <!-- Messages will be appended here -->
+                </div>
+
+                <!-- Progress and Evaluation -->
+                <div id="progress" class="border border-green-300 rounded p-4 bg-green-50 mt-4">
+                    <p class="font-semibold">📊 Progress: <span id="progress-text">0/0 interactions</span></p>
+                    <p id="evaluation" class="text-sm mt-2"></p>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="border border-red-300 rounded p-4 bg-red-50">
+                <h2 class="text-xl font-semibold text-red-600">🎮 Controls</h2>
+                <ul class="text-sm mt-2">
+                    <li class="text-red-600">🎤 SPACE - Start Speaking</li>
+                    <li class="text-red-600">⏸️ ESC - Stop Speaking</li>
+                    <li class="text-red-600">🍽️ R - Restaurant Scenario</li>
+                    <li class="text-red-600">💼 J - Job Interview</li>
+                    <li class="text-red-600">🛍️ S - Shopping Scenario</li>
+                    <li class="text-red-600">❌ Q - Quit</li>
+                    <li class="mt-4 font-semibold">📋 Instructions:</li>
+                    <li>1. Choose a scenario (R/J/S)</li>
+                    <li>2. Listen to AI character</li>
+                    <li>3. Press SPACE to respond</li>
+                    <li>4. Speak clearly into mic</li>
+                    <li>5. Get instant feedback!</li>
+                    <li class="mt-4 font-semibold">🎯 Tips:</li>
+                    <li>• Speak slowly and clearly</li>
+                    <li>• Use complete sentences</li>
+                    <li>• Be polite and contextual</li>
+                    <li>• Practice regularly!</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Listening Indicator -->
+        <div id="listening-indicator" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div class="bg-red-500 rounded-full h-12 w-12 flex items-center justify-center">
+                <span class="text-white text-2xl">🎤</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize speech recognition
+        let recognition = null;
+        let isListening = false;
+        let currentScenario = null;
+        let conversationHistory = [];
+        let userProgress = { correctResponses: 0, totalInteractions: 0 };
+        let lastUserInput = '';
+        let conversationState = 'initial'; // Track conversation state
+
+        const status = document.getElementById('status');
+        const conversation = document.getElementById('conversation');
+        const scenarioSetting = document.getElementById('scenario-setting');
+        const scenarioCharacter = document.getElementById('scenario-character');
+        const progressText = document.getElementById('progress-text');
+        const evaluation = document.getElementById('evaluation');
+
+        // Scenarios with state-based responses
+        const scenarios = {
+            restaurant: {
+                name: "French Restaurant",
+                setting: "You are dining at a French restaurant in Paris",
+                aiCharacter: "Marie - Friendly Waitress",
+                initialPrompt: "Bonjour! Welcome to Le Petit Café. How may I help you today?",
+                states: {
+                    initial: {
+                        keywords: { menu: 'menu', greeting: ['hi', 'hello', 'bonjour'] },
+                        responses: {
+                            menu: { text: "We have excellent pasta dishes, fresh salads, and our famous coq au vin. What would you like to try?", nextState: 'ordering' },
+                            greeting: { text: "Bonjour! It's nice to see you! Would you like to see the menu?", nextState: 'initial' },
+                            default: { text: "I'm sorry, could you please clarify? Would you like the menu?", nextState: 'initial' }
+                        }
+                    },
+                    ordering: {
+                        keywords: { order: ['pasta', 'salad', 'coq au vin'], drink: ['drink', 'wine', 'water', 'juice'], bill: ['bill', 'check'] },
+                        responses: {
+                            order: { text: "Excellent choice! Would you like anything to drink with that?", nextState: 'drink' },
+                            drink: { text: "Perfect! I'll bring that right out. Anything else for you?", nextState: 'additional' },
+                            bill: { text: "Of course! Your total comes to 45 euros. Will you pay by card or cash?", nextState: 'payment' },
+                            default: { text: "I'm not sure I understood. Would you like to order a dish or a drink?", nextState: 'ordering' }
+                        }
+                    },
+                    drink: {
+                        keywords: { drink: ['wine', 'water', 'juice'], additional: ['yes', 'more'], done: ['no', 'nothing', 'that\'s it'] },
+                        responses: {
+                            drink: { text: "Great! I'll add that to your order. Anything else?", nextState: 'additional' },
+                            additional: { text: "Wonderful! What else would you like?", nextState: 'additional' },
+                            done: { text: "Thank you for your order! I'll get everything ready.", nextState: 'complete' },
+                            default: { text: "Could you specify if you'd like a drink or if you're done ordering?", nextState: 'drink' }
+                        }
+                    },
+                    additional: {
+                        keywords: { done: ['no', 'nothing', 'that\'s it'], bill: ['bill', 'check'] },
+                        responses: {
+                            done: { text: "Thank you for your order! I'll get everything ready.", nextState: 'complete' },
+                            bill: { text: "Of course! Your total comes to 45 euros. Will you pay by card or cash?", nextState: 'payment' },
+                            default: { text: "Is there anything else I can help you with?", nextState: 'additional' }
+                        }
+                    },
+                    payment: {
+                        keywords: { payment: ['card', 'cash'] },
+                        responses: {
+                            payment: { text: "Thank you! Your payment has been processed. Enjoy your meal!", nextState: 'complete' },
+                            default: { text: "Please choose to pay by card or cash.", nextState: 'payment' }
+                        }
+                    },
+                    complete: {
+                        keywords: {},
+                        responses: {
+                            default: { text: "Thank you for dining with us! Press R to restart the scenario.", nextState: 'complete' }
+                        }
+                    }
+                }
+            },
+            job_interview: {
+                name: "Job Interview",
+                setting: "You are in a job interview for a marketing position",
+                aiCharacter: "Mr. Johnson - HR Manager",
+                initialPrompt: "Good morning! Please, have a seat. Tell me about yourself.",
+                states: {
+                    initial: {
+                        keywords: { about: ['about', 'myself', 'background'] },
+                        responses: {
+                            about: { text: "That's impressive! How do you think that experience would help you in this role?", nextState: 'experience' },
+                            default: { text: "Interesting. Could you tell me more about your background?", nextState: 'initial' }
+                        }
+                    },
+                    experience: {
+                        keywords: { experience: ['experience', 'work', 'job'], skills: ['skill', 'ability'] },
+                        responses: {
+                            experience: { text: "Great! Can you give a specific example of when you used those skills?", nextState: 'skills' },
+                            skills: { text: "Those are valuable skills. Can you give a specific example?", nextState: 'skills' },
+                            default: { text: "Could you share how your experience relates to this role?", nextState: 'experience' }
+                        }
+                    },
+                    skills: {
+                        keywords: { example: ['example', 'situation', 'project'] },
+                        responses: {
+                            example: { text: "Excellent! What interests you most about working here?", nextState: 'company' },
+                            default: { text: "Please provide a specific example of using your skills.", nextState: 'skills' }
+                        }
+                    },
+                    company: {
+                        keywords: { company: ['company', 'here', 'culture'] },
+                        responses: {
+                            company: { text: "Great question! We're a growing company focused on innovation. Any final questions?", nextState: 'closing' },
+                            default: { text: "What else interests you about our company?", nextState: 'company' }
+                        }
+                    },
+                    closing: {
+                        keywords: {},
+                        responses: {
+                            default: { text: "Thank you for coming in! We'll be in touch. Press J to restart.", nextState: 'closing' }
+                        }
+                    }
+                }
+            },
+            shopping: {
+                name: "Clothing Store",
+                setting: "You are shopping for clothes in a boutique",
+                aiCharacter: "Sofia - Shop Assistant",
+                initialPrompt: "Hello! Looking for anything specific today?",
+                states: {
+                    initial: {
+                        keywords: { looking: ['looking', 'want', 'need', 'clothes'] },
+                        responses: {
+                            looking: { text: "Great! What size are you looking for? We have some beautiful new arrivals.", nextState: 'size' },
+                            default: { text: "Can I help you find something specific today?", nextState: 'initial' }
+                        }
+                    },
+                    size: {
+                        keywords: { size: ['size', 'small', 'medium', 'large'], color: ['color', 'red', 'blue', 'black'] },
+                        responses: {
+                            size: { text: "Perfect! Would you like to try it on? The fitting room is right over there.", nextState: 'try' },
+                            color: { text: "That color would look lovely! We also have it in blue and black.", nextState: 'color' },
+                            default: { text: "Could you tell me what size or color you're looking for?", nextState: 'size' }
+                        }
+                    },
+                    color: {
+                        keywords: { color: ['color', 'red', 'blue', 'black'], try: ['try', 'fitting'] },
+                        responses: {
+                            color: { text: "Great choice! Would you like to try it on?", nextState: 'try' },
+                            try: { text: "The fitting room is right over there. Anything else you need?", nextState: 'additional' },
+                            default: { text: "Do you have a color preference?", nextState: 'color' }
+                        }
+                    },
+                    try: {
+                        keywords: { additional: ['more', 'else', 'another'], price: ['price', 'cost'], done: ['no', 'done', 'that\'s it'] },
+                        responses: {
+                            additional: { text: "Great! What else are you looking for?", nextState: 'initial' },
+                            price: { text: "This one is 89 euros, but we have a 20% discount today!", nextState: 'purchase' },
+                            done: { text: "Thanks for shopping with us! Ready to check out?", nextState: 'purchase' },
+                            default: { text: "Anything else I can help you find?", nextState: 'try' }
+                        }
+                    },
+                    purchase: {
+                        keywords: { purchase: ['buy', 'check out', 'pay'] },
+                        responses: {
+                            purchase: { text: "Awesome! I'll ring that up for you. Thank you!", nextState: 'complete' },
+                            default: { text: "Would you like to proceed to checkout?", nextState: 'purchase' }
+                        }
+                    },
+                    complete: {
+                        keywords: {},
+                        responses: {
+                            default: { text: "Thank you for shopping! Press S to restart.", nextState: 'complete' }
+                        }
+                    }
+                }
+            }
+        };
+
+        // Setup speech recognition with error handling
+        function setupRecognition() {
+            if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+
+                recognition.onstart = () => {
+                    isListening = true;
+                    document.body.classList.add('listening');
+                    status.textContent = '🎤 Listening... Please speak clearly!';
+                    console.log('🎤 Speech recognition started');
+                };
+
+                recognition.onresult = (event) => {
+                    isListening = false;
+                    document.body.classList.remove('listening');
+                    const transcript = event.results[0][0].transcript;
+                    lastUserInput = transcript;
+                    addToConversation('🗣️ You: ' + transcript);
+                    status.textContent = 'You said: ' + transcript;
+                    console.log('✅ Recognized: ' + transcript);
+                    handleUserInput(transcript);
+                };
+
+                recognition.onerror = (event) => {
+                    isListening = false;
+                    document.body.classList.remove('listening');
+                    let errorMessage = '';
+                    switch (event.error) {
+                        case 'network':
+                            errorMessage = 'Network error: Check your internet connection or firewall settings.';
+                            break;
+                        case 'no-speech':
+                            errorMessage = 'No speech detected. Please speak clearly and try again.';
+                            break;
+                        case 'aborted':
+                            errorMessage = 'Speech recognition aborted. Try again.';
+                            break;
+                        case 'not-allowed':
+                            errorMessage = 'Microphone access denied. Please allow microphone permissions.';
+                            break;
+                        default:
+                            errorMessage = `Speech recognition error: ${event.error}`;
+                    }
+                    status.textContent = errorMessage + ' Press SPACE to retry.';
+                    console.error('❌ Speech recognition error:', event.error);
+                };
+
+                recognition.onend = () => {
+                    isListening = false;
+                    document.body.classList.remove('listening');
+                    console.log('🎤 Speech recognition ended');
+                };
+            } else {
+                status.textContent = 'Error: Browser does not support speech recognition. Try Chrome or Edge.';
+                console.error('❌ Web Speech API not supported');
+                alert('Your browser does not support speech recognition. Please use Google Chrome or Microsoft Edge.');
+            }
+        }
+
+        // Initialize recognition
+        setupRecognition();
+
+        // Text-to-speech
+        function speak(text) {
+            try {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.0;
+                utterance.volume = 0.9;
+                window.speechSynthesis.speak(utterance);
+                console.log('🤖 Speaking: ' + text);
+            } catch (e) {
+                console.error('❌ TTS error:', e);
+                status.textContent = 'Text-to-speech error. Check browser settings.';
+            }
+        }
+
+        // Add to conversation history
+        function addToConversation(text) {
+            const p = document.createElement('p');
+            p.className = 'text-sm ' + (text.startsWith('🗣️') ? 'text-green-600' : 'text-blue-600');
+            p.textContent = text;
+            conversation.appendChild(p);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+
+        // Start a scenario
+        function startScenario(scenarioName) {
+            if (!scenarios[scenarioName]) {
+                status.textContent = `Scenario '${scenarioName}' not found!`;
+                console.error(`❌ Scenario '${scenarioName}' not found`);
+                return;
+            }
+            currentScenario = scenarios[scenarioName];
+            conversationHistory = [];
+            userProgress = { correctResponses: 0, totalInteractions: 0 };
+            conversationState = 'initial';
+            scenarioSetting.textContent = '📍 ' + currentScenario.setting;
+            scenarioCharacter.textContent = '👤 ' + currentScenario.aiCharacter;
+            conversation.innerHTML = '';
+            progressText.textContent = '0/0 interactions';
+            evaluation.innerHTML = '';
+            addToConversation('🤖 AI: ' + currentScenario.initialPrompt);
+            speak(currentScenario.initialPrompt);
+            status.textContent = `Started ${currentScenario.name} scenario. Press SPACE to respond!`;
+            console.log(`✅ Started ${currentScenario.name} scenario`);
+        }
+
+        // Generate AI response based on state
+        function generateAIResponse(userInput) {
+            if (!currentScenario) return 'Please start a scenario first.';
+            const userInputLower = userInput.toLowerCase();
+            const state = currentScenario.states[conversationState] || currentScenario.states['initial'];
+            const keywords = state.keywords;
+            const responses = state.responses;
+
+            for (const [key, keywordList] of Object.entries(keywords)) {
+                if (Array.isArray(keywordList)) {
+                    if (keywordList.some(keyword => userInputLower.includes(keyword))) {
+                        conversationState = responses[key].nextState;
+                        return responses[key].text;
+                    }
+                } else if (userInputLower.includes(keywordList)) {
+                    conversationState = responses[key].nextState;
+                    return responses[key].text;
+                }
+            }
+            conversationState = responses.default.nextState;
+            return responses.default.text;
+        }
+
+        // Evaluate user input
+        function evaluateResponse(userInput) {
+            const words = userInput.split(' ');
+            const uniqueWords = new Set(words.map(w => w.toLowerCase()));
+            const evaluation = {
+                grammarScore: Math.min(95, 70 + words.length * 2),
+                vocabularyUsage: Math.min(90, 60 + uniqueWords.size * 3),
+                fluency: Math.min(85, 65 + (userInput.length > 20 ? 20 : 10)),
+                contextAppropriateness: Math.floor(Math.random() * (95 - 75 + 1)) + 75,
+                feedback: []
+            };
+            const state = currentScenario?.states[conversationState] || currentScenario?.states['initial'];
+            let isContextual = false;
+            for (const [key, keywordList] of Object.entries(state?.keywords || {})) {
+                if (Array.isArray(keywordList)) {
+                    if (keywordList.some(keyword => userInput.toLowerCase().includes(keyword))) {
+                        isContextual = true;
+                        break;
+                    }
+                } else if (userInput.toLowerCase().includes(keywordList)) {
+                    isContextual = true;
+                    break;
+                }
+            }
+            if (words.length >= 5) evaluation.feedback.push('Good use of complete sentences!');
+            if (['please', 'thank', 'sorry', 'excuse'].some(word => userInput.toLowerCase().includes(word))) {
+                evaluation.feedback.push('Great use of polite language!');
+            }
+            if (userInput.length < 10) evaluation.feedback.push('Try to use more detailed responses');
+            if (!isContextual) evaluation.feedback.push('Try to respond with a phrase relevant to the conversation');
+            return evaluation;
+        }
+
+        // Handle user input
+        function handleUserInput(userInput) {
+            if (!currentScenario) {
+                status.textContent = 'Please choose a scenario first! (Press R, J, or S)';
+                console.warn('⚠️ No scenario selected');
+                return;
+            }
+            conversationHistory.push({ speaker: 'You', text: userInput, timestamp: new Date() });
+            userProgress.totalInteractions++;
+            const evaluationResult = evaluateResponse(userInput);
+            if (evaluationResult.grammarScore > 80 && evaluationResult.contextAppropriateness > 80) {
+                userProgress.correctResponses++;
+            }
+            progressText.textContent = `${userProgress.correctResponses}/${userProgress.totalInteractions} interactions`;
+            evaluation.innerHTML = `
+                Grammar: ${evaluationResult.grammarScore}% | Vocabulary: ${evaluationResult.vocabularyUsage}% | Fluency: ${evaluationResult.fluency}% | Context: ${evaluationResult.contextAppropriateness}%<br>
+                💡 ${evaluationResult.feedback[0] || 'Keep practicing!'}
+            `;
+            const aiResponse = generateAIResponse(userInput);
+            addToConversation('🤖 AI: ' + aiResponse);
+            conversationHistory.push({ speaker: 'AI', text: aiResponse, timestamp: new Date() });
+            speak(aiResponse);
+            status.textContent = 'Response complete. Press SPACE to continue.';
+        }
+
+        // Key event handler
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space' && !isListening && recognition) {
+                event.preventDefault();
+                if (!currentScenario) {
+                    status.textContent = 'Please choose a scenario first! (Press R, J, or S)';
+                    console.warn('⚠️ No scenario selected');
+                    return;
+                }
+                try {
+                    recognition.start();
+                } catch (e) {
+                    status.textContent = 'Error starting recognition. Check microphone and network.';
+                    console.error('❌ Error starting recognition:', e);
+                }
+            } else if (event.code === 'Escape' && isListening && recognition) {
+                event.preventDefault();
+                recognition.stop();
+                status.textContent = 'Speech recognition stopped. Press SPACE to try again.';
+                console.log('⏸️ Speech recognition stopped by ESC');
+            } else if (event.code === 'KeyR') {
+                console.log('🍽️ Starting Restaurant scenario...');
+                startScenario('restaurant');
+            } else if (event.code === 'KeyJ') {
+                console.log('💼 Starting Job Interview scenario...');
+                startScenario('job_interview');
+            } else if (event.code === 'KeyS') {
+                console.log('🛍️ Starting Shopping scenario...');
+                startScenario('shopping');
+            } else if (event.code === 'KeyQ') {
+                console.log('👋 Goodbye! Thanks for learning with us!');
+                status.textContent = 'Application closed. Refresh to restart.';
+                document.removeEventListener('keydown', this);
+            }
+        });
+
+        // Initial console messages
+        console.log('🚀 Starting VR Language Learning System...');
+        console.log('🎯 Choose a scenario to begin learning:');
+        console.log('   R - Restaurant Scenario');
+        console.log('   J - Job Interview Scenario');
+        console.log('   S - Shopping Scenario');
+        console.log('   SPACE - Start speaking (after choosing scenario)');
+        console.log('   ESC - Stop speaking');
+        console.log('   Q - Quit');
+    </script>
+</body>
+</html>
